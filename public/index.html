@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#050a14" />
+    <meta name="description" content="De Bruijn Graph Genome Assembler — reconstruct DNA sequences from short reads using Eulerian path traversal." />
+    <title>Genome Assembler</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+    <style>
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      :root {
+        --base-a: #4ade80;
+        --base-c: #38bdf8;
+        --base-g: #fb923c;
+        --base-t: #f472b6;
+        --bg:     #050a14;
+      }
+
+      html, body {
+        height: 100%;
+        background: var(--bg);
+        overflow-x: hidden;
+      }
+
+      body {
+        font-family: 'DM Mono', monospace;
+      }
+
+      /* ── Loading screen shown before React mounts ── */
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        background: var(--bg);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 32px;
+        transition: opacity 0.5s ease, visibility 0.5s ease;
+      }
+
+      #splash.hidden {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+
+      /* ── Animated DNA strand ── */
+      .dna-loader {
+        display: flex;
+        align-items: flex-end;
+        gap: 5px;
+        height: 48px;
+      }
+
+      .dna-loader span {
+        width: 8px;
+        border-radius: 4px;
+        animation: dna-wave 1.2s ease-in-out infinite;
+      }
+
+      .dna-loader span:nth-child(1)  { background: var(--base-a); animation-delay: 0.00s; }
+      .dna-loader span:nth-child(2)  { background: var(--base-c); animation-delay: 0.10s; }
+      .dna-loader span:nth-child(3)  { background: var(--base-g); animation-delay: 0.20s; }
+      .dna-loader span:nth-child(4)  { background: var(--base-t); animation-delay: 0.30s; }
+      .dna-loader span:nth-child(5)  { background: var(--base-a); animation-delay: 0.40s; }
+      .dna-loader span:nth-child(6)  { background: var(--base-c); animation-delay: 0.50s; }
+      .dna-loader span:nth-child(7)  { background: var(--base-g); animation-delay: 0.60s; }
+      .dna-loader span:nth-child(8)  { background: var(--base-t); animation-delay: 0.70s; }
+      .dna-loader span:nth-child(9)  { background: var(--base-a); animation-delay: 0.80s; }
+      .dna-loader span:nth-child(10) { background: var(--base-c); animation-delay: 0.90s; }
+
+      @keyframes dna-wave {
+        0%, 100% { height: 12px; opacity: 0.4; }
+        50%       { height: 48px; opacity: 1;   }
+      }
+
+      .splash-label {
+        font-family: 'DM Mono', monospace;
+        font-size: 11px;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        background: linear-gradient(90deg, var(--base-a), var(--base-c), var(--base-g), var(--base-t));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        animation: shimmer 3s linear infinite;
+        background-size: 200% auto;
+      }
+
+      @keyframes shimmer {
+        to { background-position: 200% center; }
+      }
+
+      /* ── Ambient background layers ── */
+      #bg-canvas {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+      }
+
+      /* ── React root ── */
+      #root {
+        position: relative;
+        z-index: 1;
+        min-height: 100vh;
+      }
+
+      /* ── Noscript ── */
+      noscript {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        font-family: 'DM Mono', monospace;
+        font-size: 13px;
+        color: #475569;
+        letter-spacing: 0.05em;
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- Ambient background canvas -->
+    <canvas id="bg-canvas" aria-hidden="true"></canvas>
+
+    <!-- Splash screen (hidden once React mounts) -->
+    <div id="splash" aria-hidden="true">
+      <div class="dna-loader">
+        <span></span><span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+      <span class="splash-label">Genome Assembler</span>
+    </div>
+
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+
+    <script>
+      /* ── Floating base-letter particles on canvas ── */
+      (function () {
+        const canvas = document.getElementById('bg-canvas');
+        const ctx = canvas.getContext('2d');
+        const BASES = ['A', 'C', 'G', 'T'];
+        const COLORS = {
+          A: 'rgba(74,222,128,',
+          C: 'rgba(56,189,248,',
+          G: 'rgba(251,146,60,',
+          T: 'rgba(244,114,182,',
+        };
+
+        let W, H, particles;
+
+        function resize() {
+          W = canvas.width  = window.innerWidth;
+          H = canvas.height = window.innerHeight;
+        }
+
+        function makeParticle() {
+          const base  = BASES[Math.floor(Math.random() * 4)];
+          return {
+            base,
+            color: COLORS[base],
+            x:     Math.random() * W,
+            y:     Math.random() * H,
+            size:  10 + Math.random() * 10,
+            speedX: (Math.random() - 0.5) * 0.18,
+            speedY: -0.12 - Math.random() * 0.2,
+            opacity: 0.04 + Math.random() * 0.07,
+          };
+        }
+
+        function init() {
+          resize();
+          particles = Array.from({ length: 60 }, makeParticle);
+        }
+
+        function draw() {
+          ctx.clearRect(0, 0, W, H);
+          for (const p of particles) {
+            ctx.font = `${p.size}px 'DM Mono', monospace`;
+            ctx.fillStyle = p.color + p.opacity + ')';
+            ctx.fillText(p.base, p.x, p.y);
+
+            p.x += p.speedX;
+            p.y += p.speedY;
+
+            if (p.y < -20) { p.y = H + 20; p.x = Math.random() * W; }
+            if (p.x < -20) p.x = W + 20;
+            if (p.x > W + 20) p.x = -20;
+          }
+          requestAnimationFrame(draw);
+        }
+
+        window.addEventListener('resize', resize);
+        init();
+        draw();
+      })();
+
+      /* ── Hide splash once React has rendered ── */
+      (function () {
+        const splash = document.getElementById('splash');
+        const observer = new MutationObserver(function () {
+          const root = document.getElementById('root');
+          if (root && root.children.length > 0) {
+            splash.classList.add('hidden');
+            observer.disconnect();
+          }
+        });
+        observer.observe(document.getElementById('root'), { childList: true });
+
+        // Fallback: hide after 3s regardless
+        setTimeout(function () { splash.classList.add('hidden'); }, 3000);
+      })();
+    </script>
+
+  </body>
+</html>
