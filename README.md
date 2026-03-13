@@ -192,9 +192,3 @@ This assembler is the natural successor to [Sequence Alignment Studio](https://g
 ## 📄 License
 
 MIT © [etamara6](https://github.com/etamara6)
-
----
-
-## 📄 License
-
-MIT © [etamara6](https://github.com/etamara6)
