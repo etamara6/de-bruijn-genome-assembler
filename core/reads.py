@@ -1,91 +1,76 @@
-"""
-reads.py — Read ingestion and k-mer decomposition for De Bruijn graph assembly.
-
-Handles loading DNA reads from lists or FASTA files, decomposing them into
-overlapping k-mers, and producing (prefix, suffix) edge tuples for graph construction.
-"""
-
 from __future__ import annotations
 
-import re
-from collections.abc import Iterator
-from dataclasses import dataclass, field
 from pathlib import Path
-
-
-# ---------------------------------------------------------------------------
-# Data containers
-# ---------------------------------------------------------------------------
+from typing import Iterator
+from dataclasses import dataclass
 
 @dataclass
 class ReadSet:
-    """Container for a collection of DNA reads and their derived k-mer edges.
+    """A set of DNA reads decomposed into k-mer edges."""
 
-    Attributes:
-        reads: The raw DNA sequences loaded from input.
-        k: The k-mer length used for decomposition.
-        edges: List of (prefix, suffix) tuples where prefix = kmer[:-1]
-               and suffix = kmer[1:], representing edges in the De Bruijn graph.
-    """
-    reads: list[str]
+    original_reads: list[str]
     k: int
-    edges: list[tuple[str, str]] = field(default_factory=list)
+    edges: list[tuple[str, str]]
 
     @property
     def total_kmers(self) -> int:
-        """Total number of k-mer edges extracted from all reads."""
+        """Total count of k-mers (edges) across all reads."""
         return len(self.edges)
 
+    def edge_counts(self) -> dict[tuple[str, str], int]:
+        """Return a dict mapping each unique edge to its count."""
+        counts: dict[tuple[str, str], int] = {}
+        for edge in self.edges:
+            counts[edge] = counts.get(edge, 0) + 1
+        return counts
 
-# ---------------------------------------------------------------------------
+
+# ===========================================================================
 # Validation helpers
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
-_VALID_DNA_RE = re.compile(r"^[ACGTNacgtn]+$")
+def _validate_dna_sequence(seq: str, index: int) -> None:
+    """Check that *seq* is non-empty and contains only ACGT (any case)."""
+    if not seq:
+        raise ValueError(f"Read {index}: empty read.")
 
-
-def _validate_dna_sequence(sequence: str, index: int) -> None:
-    """Raise ValueError if *sequence* is empty or contains non-DNA characters.
-
-    Raises:
-        ValueError: If the sequence is empty or contains invalid characters.
-    """
-    if not sequence:
-        raise ValueError(f"Read at index {index} is empty.")
-    if not _VALID_DNA_RE.match(sequence):
+    valid_chars = set("ACGTacgt")
+    invalid = set(seq) - valid_chars
+    if invalid:
         raise ValueError(
-            f"Read at index {index} contains invalid characters: '{sequence}'. "
-            "Only A, C, G, T, N (case-insensitive) are allowed."
+            f"Read {index}: invalid characters {invalid}. "
+            f"Expected only A, C, G, T (case-insensitive)."
         )
 
 
 def _validate_k(k: int, min_read_length: int) -> None:
-    """Ensure k is a sensible value relative to the shortest read.
-
-    Raises:
-        ValueError: If k is less than 2 or longer than the shortest read.
-    """
-    if k < 2:
-        raise ValueError(f"k must be >= 2, got {k}.")
+    """Check that *k* is positive and not larger than the shortest read."""
+    if k <= 0:
+        raise ValueError(f"k must be positive, got {k}.")
     if k > min_read_length:
         raise ValueError(
-            f"k ({k}) is longer than the shortest read ({min_read_length} bp). "
-            "Reduce k or provide longer reads."
+            f"k={k} is longer than the shortest read ({min_read_length}). "
+            f"Use a smaller k."
         )
 
 
-# ---------------------------------------------------------------------------
-# FASTA parser
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# FASTA file I/O
+# ===========================================================================
 
 def load_fasta(filepath: str | Path) -> list[str]:
-    """Parse a FASTA file and return a list of uppercase DNA sequences.
+    """Load DNA sequences from a FASTA file.
 
-    Multi-line sequences are concatenated.  Comment lines (starting with ';')
-    and blank lines are ignored.
+    Empty lines, and lines starting with ';' (comment) are ignored.
 
-    Args:
-        filepath: Path to the FASTA file.
+    Each header line (starting with '>') marks the start of a new sequence.
+    Subsequent lines are concatenated until the next header (or EOF).
+
+    All sequences are returned in uppercase for consistency.
+
+    Reads are deduplicated automatically using a dict (insertion order preserved).
+    This means if the same sequence appears multiple times in the file,
+    only one copy is returned.
 
     Returns:
         List of DNA sequences as uppercase strings.
@@ -135,12 +120,13 @@ def decompose_read(read: str, k: int) -> Iterator[tuple[str, str]]:
         prefix = kmer[:-1]  (length k-1)
         suffix = kmer[1:]   (length k-1)
 
-    *read* is expected to be uppercase; call ``read.upper()`` beforehand if needed.
+    *read* is normalized to uppercase automatically.
 
     Example:
         >>> list(decompose_read("ACGTTGCA", 4))
         [('ACG', 'CGT'), ('CGT', 'GTT'), ('GTT', 'TTG'), ('TTG', 'TGC'), ('TGC', 'GCA')]
     """
+    read = read.upper()  # Normalize to uppercase
     for start in range(len(read) - k + 1):
         kmer = read[start : start + k]
         yield kmer[:-1], kmer[1:]
@@ -181,4 +167,4 @@ def decompose_reads(reads: list[str], k: int) -> ReadSet:
     for read in normalised:
         all_edges.extend(decompose_read(read, k))
 
-    return ReadSet(reads=normalised, k=k, edges=all_edges)
+    return ReadSet(original_reads=normalised, k=k, edges=all_edges)
