@@ -80,7 +80,26 @@ class DeBruijnGraph:
         self.in_degree: Dict[str, int] = defaultdict(int)
         self.out_degree: Dict[str, int] = defaultdict(int)
 
-        self._build(edges)
+        # De-duplicate edges before building the graph.
+        #
+        # Overlapping/redundant sequencing reads observe the same true
+        # k-mer transition many times (that's what read *coverage* is).
+        # Each observation is NOT a distinct edge in the underlying De
+        # Bruijn graph -- it's the same edge sampled repeatedly. Treating
+        # every raw occurrence as its own graph edge inflates edge
+        # multiplicity for non-repetitive genome regions, forcing
+        # Eulerian traversal to loop back through the same true sequence
+        # multiple times and produce an inflated, incorrect contig.
+        #
+        # Real repeats in the genome are still represented correctly:
+        # a repeat produces the same edge appearing at >1 *distinct*
+        # graph positions only when the repeat structurally requires
+        # revisiting a node, which the deduplicated graph still captures
+        # via node in/out-degree > 1 (branching), not via inflated raw
+        # edge counts.
+        unique_edges = sorted(set(edges))
+
+        self._build(unique_edges)
 
     # ------------------------------------------------------------------
     # Construction
